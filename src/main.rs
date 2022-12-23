@@ -18,7 +18,7 @@ fn create_text_texture<'a>(
     text: &str,
     font: &sdl2::ttf::Font,
     color: Color,
-) -> Result<Texture<'a>, String> {
+) -> Result<(Texture<'a>, (u32, u32)), String> {
     let surface = font
         .render(text)
         .blended(color)
@@ -26,7 +26,7 @@ fn create_text_texture<'a>(
     let texture = texture_creator
         .create_texture_from_surface(&surface)
         .map_err(|e| e.to_string())?;
-    Ok(texture)
+    Ok((texture, surface.size()))
 }
 
 fn main() -> Result<(), String> {
@@ -36,15 +36,14 @@ fn main() -> Result<(), String> {
 
     let mut mand = Mandelbrot::new(WIDTH, HEIGHT);
 
-    let sdl = sdl2::init()
-        .map_err(|e| e.to_string())?;
+    let sdl = sdl2::init().map_err(|e| e.to_string())?;
 
-    let sdl_video = sdl.video()
-        .map_err(|e| e.to_string())?;
+    let sdl_video = sdl.video().map_err(|e| e.to_string())?;
 
     let window = sdl_video
         .window(WINDOW_NAME, WIDTH, HEIGHT)
         .position_centered()
+        .opengl()
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -56,13 +55,11 @@ fn main() -> Result<(), String> {
 
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     let texture_creator = canvas.texture_creator();
-    let mut event_pump = sdl
-        .event_pump()
-        .map_err(|e| e.to_string())?;
+    let mut event_pump = sdl.event_pump().map_err(|e| e.to_string())?;
 
-    let ttf_context = sdl2::ttf::init()
-        .map_err(|e| e.to_string())?;
-    let font = ttf_context.load_font("/usr/share/fonts/TTF/DejaVuMathTeXGyre.ttf", 128)?;
+    let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
+
+    let font = ttf_context.load_font("/usr/share/fonts/TTF/Inconsolata-Regular.ttf", 20)?;
 
     let mut mandelbrot_texture = texture_creator
         .create_texture_target(None, WIDTH, HEIGHT)
@@ -77,16 +74,17 @@ fn main() -> Result<(), String> {
     let mut down_pos: Option<Point> = None;
     let mut mouse_box: Option<Rect> = None;
     let mut show_info = false;
-    println!("{:?}", canvas.default_pixel_format());
     'paint: loop {
         for event in event_pump.poll_iter() {
             match event {
                 Event::KeyDown { keycode, .. } => match keycode {
                     Some(Keycode::Q) => {
-                        mand.change_max_iter(std::cmp::max(2, mand.get_max_iter() / 10))
+                        let change = std::cmp::max(2, mand.get_max_iter() / 10);
+                        mand.change_max_iter(change);
                     }
                     Some(Keycode::A) => {
-                        mand.change_max_iter(-std::cmp::max(2, mand.get_max_iter() / 10))
+                        let change = -std::cmp::max(2, mand.get_max_iter() / 10);
+                        mand.change_max_iter(change)
                     }
                     Some(Keycode::L) => mand.set_max_iter(5),
                     Some(Keycode::J) => mand.toggle_julia(),
@@ -202,21 +200,32 @@ fn main() -> Result<(), String> {
         if show_info {
             let (x_min, x_max) = mand.x_bounds();
             let (y_min, y_max) = mand.y_bounds();
-            let info_strs = [
-                format!("Iters: {}, Color: {:?}", mand.get_max_iter(), mand.color()),
+            let text_textures: Vec<(Texture, (u32, u32))> = [
                 format!("X {} -> {}", x_min, x_max),
-                format!("Y {} -> {}", y_min, y_max)
-            ];
+                format!("Y {} -> {}", y_min, y_max),
+                format!("Iters: {}, Color: {:?}", mand.get_max_iter(), mand.color()),
+            ]
+            .iter()
+            .map(|text| create_text_texture(&texture_creator, &text, &font, Color::WHITE).unwrap())
+            .collect();
 
-            const TEXT_HEIGHT: i32 = 20;
-            for (i, text) in info_strs.iter().enumerate() {
-                let text_texture =
-                    create_text_texture(&texture_creator, &text, &font, Color::RED)?;
-                let dest = Some(Rect::new(0, TEXT_HEIGHT * i as i32, 300, 20));
+            const PADDING: u32 = 5;
 
-                canvas.set_draw_color(Color::RGBA(0, 0, 0, 150));
-                canvas.fill_rect(dest)?;
+            let max_width: u32 = text_textures.iter().map(|e| e.1.0).max().unwrap();
+            let text_height: u32 = text_textures[0].1.1;
 
+            canvas.set_draw_color(Color::RGBA(0, 0, 0, 150));
+            let background_rect = Rect::new(
+                0,
+                0,
+                max_width + PADDING * 2,
+                text_height * text_textures.len() as u32 + PADDING * 2,
+            );
+            canvas.fill_rect(Some(background_rect))?;
+
+            for (i, (text_texture, (width, height))) in text_textures.iter().enumerate() {
+                let height_offset = (PADDING + text_height * i as u32) as i32;
+                let dest = Some(Rect::new(PADDING as i32, height_offset, *width, *height));
                 canvas.copy(&text_texture, None, dest)?;
             }
         }
